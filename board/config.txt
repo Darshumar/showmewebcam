@@ -1,0 +1,21 @@
+# Show-me webcam firmware configuration
+# See https://www.raspberrypi.com/documentation/computers/config_txt.html
+
+# Extended firmware (start_x.elf / start4x.elf) is required for the
+# legacy camera stack and the GPU MJPEG/H264 encoder.
+start_x=1
+gpu_mem=128
+
+kernel=zImage
+disable_overscan=1
+
+# USB device mode (gadget)
+dtoverlay=dwc2
+
+# UART on the 40-pin header
+enable_uart=1
+
+# Boot as fast as possible
+boot_delay=0
+disable_splash=1
+initial_turbo=10
