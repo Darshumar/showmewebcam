@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        raspberry: ['raspberrypi0', 'raspberrypi0w', 'raspberrypi4']
+        raspberry: ['raspberrypi0', 'raspberrypi0w']
 
     steps:
       - name: Checkout Code
