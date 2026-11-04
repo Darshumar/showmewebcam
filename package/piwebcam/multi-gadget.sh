@@ -71,6 +71,13 @@ EOF
 config_usb_webcam () {
   mkdir -p functions/uvc.usb0/control/header/h
 
+  # Advertise the camera terminal and processing unit controls that
+  # uvc-gadget forwards to the camera (exposure, brightness, contrast,
+  # saturation, sharpness, white balance, ...). Since Linux 6.x this is
+  # writable through configfs, so no kernel patch is needed anymore.
+  printf '10\n0\n0\n' > functions/uvc.usb0/control/terminal/camera/default/bmControls
+  printf '219\n4\n'   > functions/uvc.usb0/control/processing/default/bmControls
+
   if [ -r $VIDEO_FORMATS_USER_FILE ] ; then
     FORMATS_FILE=$VIDEO_FORMATS_USER_FILE
   else

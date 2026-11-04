@@ -1,15 +1,12 @@
 name: Build/Release
 
 on:
-  # Triggers the workflow on push or pull request events on the master branch
   push:
     tags:
-      - 'v*' # Push events to matching v*, i.e. v1.50
+      - 'v*'
     branches: [ master ]
   pull_request:
     branches: [ master ]
-
-  # Allows to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 defaults:
@@ -18,114 +15,99 @@ defaults:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     env:
       BUILDROOT_DIR: 'buildroot'
+      BR2_DL_DIR: ${{ github.workspace }}/dl
 
     strategy:
+      fail-fast: false
       matrix:
-        raspberry: ['raspberrypi0', 'raspberrypi0w', 'raspberrypi4']
+        raspberry: ['raspberrypi0', 'raspberrypi0w']
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: 'recursive'
 
-      # Retrieve annotated tags as the checkout above doesn't do this
-      # https://github.com/actions/checkout/issues/217#issuecomment-636481619
-      - name: Fetch Git Tag History
+      - name: Install build dependencies
         run: |
-          git fetch --depth=1 origin +refs/tags/*:refs/tags/*
-          echo "SMW_VERSION=$(buildroot/support/scripts/setlocalversion)" >> $GITHUB_ENV
-          echo "BUILDROOT_VERSION=$(git rev-parse --short HEAD:${BUILDROOT_DIR})" >> $GITHUB_ENV
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc cpio file rsync unzip wget libssl-dev
 
-      - name: Cache Build
-        id: restore-cache
-        uses: actions/cache@v2
+      - name: Determine versions
+        run: |
+          git fetch --depth=1 origin +refs/tags/*:refs/tags/* || true
+          echo "SMW_VERSION=$(buildroot/support/scripts/setlocalversion)" >> "$GITHUB_ENV"
+          echo "BUILDROOT_VERSION=$(git rev-parse --short HEAD:${BUILDROOT_DIR})" >> "$GITHUB_ENV"
+
+      # Only the source downloads are cached: a full output/ directory is
+      # too large for the GitHub cache and goes stale quickly anyway.
+      - name: Cache downloads
+        uses: actions/cache@v4
         with:
-          path: |
-            output
-            buildroot
-          # Stupid hack to invalidate cache from UI
-          # https://github.com/actions/cache/issues/2#issuecomment-673493515
-          key: ${{ matrix.raspberry }}-${{ env.BUILDROOT_DIR }}-${{ env.BUILDROOT_VERSION }}-${{ secrets.CACHE_VERSION }}
-
-      # Github Actions are sometimes blocked from this mirror
-      # https://github.com/actions/virtual-environments/issues/2577
-      - name: Blocked mirror workaround
-        run: echo "127.0.0.1 invisible-mirror.net" | sudo tee -a /etc/hosts
+          path: dl
+          key: dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('configs/*', 'package/**/*.mk') }}
+          restore-keys: |
+            dl-${{ env.BUILDROOT_VERSION }}-
+            dl-
 
       - name: Build Image
         run: |
-          # Force a piwebcam rebuild every time
-          rm -fr output/*/build/piwebcam*
-          sh build-showmewebcam.sh ${{ matrix.raspberry }}
+          bash build-showmewebcam.sh ${{ matrix.raspberry }}
           cp output/${{ matrix.raspberry }}/images/sdcard.img sdcard-${{ matrix.raspberry }}-${{ env.SMW_VERSION }}.img
 
       - name: Upload Image
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: sdcard-${{ matrix.raspberry }}-${{ env.SMW_VERSION }}.img
           path: sdcard-${{ matrix.raspberry }}-${{ env.SMW_VERSION }}.img
 
       - name: Prepare Release Image
         if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          cp output/${{ matrix.raspberry }}/images/sdcard.img sdcard-${{ matrix.raspberry }}-${{ env.SMW_VERSION }}.img
-          gzip sdcard-${{ matrix.raspberry }}-${{ env.SMW_VERSION }}.img
+        run: gzip -k sdcard-${{ matrix.raspberry }}-${{ env.SMW_VERSION }}.img
 
       - name: Store Release Image
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: release
+          name: release-${{ matrix.raspberry }}
           path: sdcard-${{ matrix.raspberry }}-${{ env.SMW_VERSION }}.img.gz
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     needs: build
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # We use a temporary file as Github Actions support for multiline
-      # environment variables is quite shady: https://github.com/actions/toolkit/issues/403
       - name: Create Changelog
         run: |
-          cat << EOF > CHANGELOG.md
-            What's new:
-
-          EOF
+          printf "What's new:\n\n" > CHANGELOG.md
           git log $(git describe --tags --abbrev=0 HEAD^)..${{ github.ref }} --no-merges --pretty=format:"- %s" >> CHANGELOG.md
 
-      - name: Create Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: ${{ github.ref }}
-          draft: false
-          prerelease: false
-          body_path: CHANGELOG.md
-
       - name: Download Build Artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
-          name: release
+          pattern: release-*
+          merge-multiple: true
 
       - name: Create checksums file
         run: sha256sum sdcard* > CHECKSUMS.sha256
 
-      - name: Upload Binaries to Release
-        uses: alexellis/upload-assets@0.2.2
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          asset_paths: '["sdcard*", "CHECKSUMS.sha256"]'
+          body_path: CHANGELOG.md
+          files: |
+            sdcard*
+            CHECKSUMS.sha256
